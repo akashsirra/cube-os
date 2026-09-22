@@ -296,7 +296,7 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
   renderer.domElement.addEventListener('pointerdown',pointerDown);
   renderer.domElement.addEventListener('pointermove',pointerMove);
   renderer.domElement.addEventListener('pointerup',pointerUp);
-  renderer.domElement.addEventListener('pointercancel',()=>{down=null});
+  renderer.domElement.addEventListener('pointercancel',()=>{if(drag)finishDrag()});
 
   const resize=()=>{
    const w=el.clientWidth,h=Math.max(1,el.clientHeight);
@@ -328,9 +328,12 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
 
  React.useEffect(()=>{
   const e=engineRef.current;if(!e||!command)return;
-  if(command.reset){e.reset();return}
-  if(command.sequence){e.reset();e.enqueue(command.sequence);return}
-  if(command.move)e.enqueue([command.move]);
+  if(command.reset){skipNextCommand=null;e.reset();return}
+  if(command.sequence){skipNextCommand=null;e.reset();e.enqueue(command.sequence);return}
+  if(command.move){
+   if(skipNextCommand===command.move){skipNextCommand=null;return}
+   e.enqueue([command.move]);
+  }
  },[command]);
 
  return <div ref={mount} className="three-cube" aria-label="Interactive 3D Rubik's Cube"/>;
