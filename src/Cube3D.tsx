@@ -145,96 +145,154 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
    if(!busy){const next=queue.shift();if(next)animateMove(next)}
   };
 
-  type GestureStart={x:number;y:number;face?:string};
-  let down:GestureStart|null=null;
+  type DragState={
+   x:number;y:number;face:string;axis:Coord;
+   pivot:THREE.Group;selected:THREE.Mesh[];
+   plane:THREE.Plane;center:THREE.Vector3;worldAxis:THREE.Vector3;
+   startVector:THREE.Vector3;angle:number;pointerId:number;
+  };
+  let drag:DragState|null=null;
+  let skipNextCommand:Move|null=null;
   const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2();
 
-  const hitAt=(e:PointerEvent)=>{
+  const setPointer=(e:PointerEvent)=>{
    const r=renderer.domElement.getBoundingClientRect();
    pointer.x=((e.clientX-r.left)/r.width)*2-1;
    pointer.y=-((e.clientY-r.top)/r.height)*2+1;
    raycaster.setFromCamera(pointer,camera);
+  };
+
+  const hitAt=(e:PointerEvent)=>{
+   setPointer(e);
    return raycaster.intersectObjects(cubies,false)[0];
   };
 
-  const projectDirection=(dir:THREE.Vector3)=>{
-   const origin=new THREE.Vector3(0,0,0);
-   const a=origin.clone().project(camera);
-   const b=dir.clone().project(camera);
-   return new THREE.Vector2(b.x-a.x,b.y-a.y).normalize();
+  const pointOnDragPlane=(e:PointerEvent)=>{
+   setPointer(e);
+   const p=new THREE.Vector3();
+   return raycaster.ray.intersectPlane(drag!.plane,p)?p:null;
   };
 
-  // These are the "screen right" and "screen up" directions of each
-  // face in cube-local coordinates. We project them through the actual
-  // camera/root orientation, so a swipe follows what the user sees.
-  const FACE_BASIS:Record<string,{right:Coord;up:Coord}>={
-   F:{right:{x:1,y:0,z:0},up:{x:0,y:1,z:0}},
-   B:{right:{x:-1,y:0,z:0},up:{x:0,y:1,z:0}},
-   R:{right:{x:0,y:0,z:-1},up:{x:0,y:1,z:0}},
-   L:{right:{x:0,y:0,z:1},up:{x:0,y:1,z:0}},
-   U:{right:{x:1,y:0,z:0},up:{x:0,y:0,z:-1}},
-   D:{right:{x:1,y:0,z:0},up:{x:0,y:0,z:1}}
-  };
+  const finishDrag=()=>{
+   const d=drag;if(!d)return;
+   drag=null;
+   const raw=d.angle;
+   const quarter=Math.PI/2;
+   const target=Math.abs(raw)>=quarter*.5
+    ?Math.sign(raw)*quarter
+    :0;
+   const start=performance.now(),duration=target===0?120:170;
+   const from=raw;
 
-  const screenBasis=(face:string)=>{
-   const b=FACE_BASIS[face];
-   if(!b)return null;
-   const right=projectDirection(new THREE.Vector3(b.right.x,b.right.y,b.right.z).applyQuaternion(root.quaternion));
-   const up=projectDirection(new THREE.Vector3(b.up.x,b.up.y,b.up.z).applyQuaternion(root.quaternion));
-   return {right,up};
+   const settle=(now:number)=>{
+    if(destroyed)return;
+    const t=Math.min(1,(now-start)/duration);
+    const e=t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+    const a=from+(target-from)*e;
+    d.pivot.setRotationFromAxisAngle(new THREE.Vector3(d.axis.x,d.axis.y,d.axis.z),a);
+    if(t<1){requestAnimationFrame(settle);return;}
+
+    d.pivot.setRotationFromAxisAngle(
+     new THREE.Vector3(d.axis.x,d.axis.y,d.axis.z),target
+    );
+
+    if(target!==0){
+     const face=d.face;
+     const move=face+(target<0?"'":"");
+     d.selected.forEach(c=>{
+      const p=c.userData.coord as Coord;
+      const np=rotateCoord(p,d.axis);
+      c.userData.coord=np;
+      root.attach(c);
+      c.position.set(np.x,np.y,np.z);
+     });
+     skipNextCommand=move;
+     moveRef.current?.(move);
+    }else{
+     d.selected.forEach(c=>root.attach(c));
+     d.selected.forEach(c=>{
+      const p=c.userData.coord as Coord;
+      c.position.set(p.x,p.y,p.z);
+     });
+    }
+
+    root.remove(d.pivot);
+    glow.material.opacity=0;
+    root.scale.set(1.025,1.025,1.025);
+    setTimeout(()=>root.scale.set(1,1,1),70);
+    setBusy(false);
+   };
+   requestAnimationFrame(settle);
   };
 
   const pointerDown=(e:PointerEvent)=>{
-   if(busy)return;
+   if(busy||drag)return;
    const hit=hitAt(e);
-   let face:string|undefined;
-   if(hit?.face){
-    // Raycaster gives the hit in world space; transform the face normal
-    // with the cubie's world matrix before deciding which layer was touched.
-    const normal=hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
-    face=faceFromNormal(normal);
-   }
-   down={x:e.clientX,y:e.clientY,face};
+   if(!hit?.face)return;
+
+   const normal=hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+   const face=faceFromNormal(normal);
+   const axis=NORMALS[face];
+
+   root.updateWorldMatrix(true,false);
+   const worldAxis=new THREE.Vector3(axis.x,axis.y,axis.z)
+    .applyQuaternion(root.getWorldQuaternion(new THREE.Quaternion())).normalize();
+   const center=root.getWorldPosition(new THREE.Vector3());
+   const facePoint=center.clone().add(worldAxis.clone().multiplyScalar(1));
+   const plane=new THREE.Plane().setFromNormalAndCoplanarPoint(worldAxis,facePoint);
+   const startVector=hit.point.clone().sub(center);
+   startVector.sub(worldAxis.clone().multiplyScalar(startVector.dot(worldAxis))).normalize();
+
+   const selected=cubies.filter(c=>{
+    const p=c.userData.coord as Coord;
+    return (axis.x&&p.x===axis.x)||(axis.y&&p.y===axis.y)||(axis.z&&p.z===axis.z);
+   });
+
+   const pivot=new THREE.Group();
+   root.add(pivot);
+   selected.forEach(c=>pivot.attach(c));
+
+   drag={
+    x:e.clientX,y:e.clientY,face,axis,pivot,selected,plane,center,worldAxis,
+    startVector,angle:0,pointerId:e.pointerId
+   };
+
+   setBusy(true);
+   glow.material.opacity=.18;
    renderer.domElement.setPointerCapture(e.pointerId);
   };
 
   const pointerMove=(e:PointerEvent)=>{
-   if(!down||busy||down.face)return;
-   const dx=e.clientX-down.x,dy=e.clientY-down.y;
-   root.rotation.y+=dx*.0009;
-   root.rotation.x+=dy*.0009;
-   down.x=e.clientX;down.y=e.clientY;
+   if(!drag||busy!==true)return;
+   const d=drag;
+   const point=pointOnDragPlane(e);
+   if(!point)return;
+
+   const v=point.clone().sub(d.center);
+   v.sub(d.worldAxis.clone().multiplyScalar(v.dot(d.worldAxis)));
+   if(v.lengthSq()<0.04)return;
+   v.normalize();
+
+   let angle=Math.atan2(
+    d.worldAxis.dot(d.startVector.clone().cross(v)),
+    d.startVector.dot(v)
+   );
+
+   // Keep the interaction continuous across the +/-PI boundary.
+   const turns=Math.round((d.angle-angle)/(Math.PI*2));
+   angle+=turns*Math.PI*2;
+   d.angle=angle;
+
+   d.pivot.setRotationFromAxisAngle(
+    new THREE.Vector3(d.axis.x,d.axis.y,d.axis.z),angle
+   );
+   glow.material.opacity=.18+.18*Math.min(1,Math.abs(angle)/(Math.PI/2));
   };
 
   const pointerUp=(e:PointerEvent)=>{
-   if(!down||busy)return;
-   const d=down;down=null;
-   if(!d.face)return;
-
-   const dx=e.clientX-d.x,dy=e.clientY-d.y;
-   if(Math.hypot(dx,dy)<18)return;
-
-   const basis=screenBasis(d.face);
-   if(!basis)return;
-
-   // Screen Y is positive downward, while our projected basis uses
-   // mathematical Y. Flip the gesture Y before comparing directions.
-   const swipe=new THREE.Vector2(dx,-dy).normalize();
-   const horizontal=Math.abs(swipe.dot(basis.right));
-   const vertical=Math.abs(swipe.dot(basis.up));
-
-   // IMPORTANT: the sign is intentionally tied to the visual face
-   // orientation, not to a generic clockwise test. This means:
-   // swipe right => visually clockwise face turn,
-   // swipe left  => its inverse,
-   // swipe up/down => the corresponding quarter turn.
-   const clockwise=horizontal>=vertical
-    ?swipe.dot(basis.right)>0
-    :swipe.dot(basis.up)<0;
-
-   moveRef.current?.(d.face+(clockwise?'':"'"));
+   if(!drag||e.pointerId!==drag.pointerId)return;
+   finishDrag();
   };
-
   renderer.domElement.addEventListener('pointerdown',pointerDown);
   renderer.domElement.addEventListener('pointermove',pointerMove);
   renderer.domElement.addEventListener('pointerup',pointerUp);
