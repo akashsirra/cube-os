@@ -145,7 +145,8 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
    if(!busy){const next=queue.shift();if(next)animateMove(next)}
   };
 
-  let down:{x:number;y:number;face?:string}|null=null;
+  type GestureStart={x:number;y:number;face?:string;hit?:THREE.Vector3};
+  let down:GestureStart|null=null;
   const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2();
 
   const hitAt=(e:PointerEvent)=>{
@@ -156,6 +157,15 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
    return raycaster.intersectObjects(cubies,false)[0];
   };
 
+  const projectToScreen=(world:THREE.Vector3)=>{
+   const r=renderer.domElement.getBoundingClientRect();
+   const p=world.clone().project(camera);
+   return {
+    x:r.left+(p.x+1)*.5*r.width,
+    y:r.top+(1-p.y)*.5*r.height
+   };
+  };
+
   const pointerDown=(e:PointerEvent)=>{
    if(busy)return;
    const hit=hitAt(e);
@@ -164,7 +174,7 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
     const normal=hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
     face=faceFromNormal(normal);
    }
-   down={x:e.clientX,y:e.clientY,face};
+   down={x:e.clientX,y:e.clientY,face,hit:hit?.point.clone()};
    renderer.domElement.setPointerCapture(e.pointerId);
   };
 
@@ -180,10 +190,35 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
    if(!down||busy)return;
    const d=down;down=null;
    if(!d.face)return;
+
    const dx=e.clientX-d.x,dy=e.clientY-d.y;
-   if(Math.max(Math.abs(dx),Math.abs(dy))<18)return;
-   const positive=Math.abs(dx)>=Math.abs(dy)?dx>0:dy>0;
-   moveRef.current?.(d.face+(positive?'':"'"));
+   const distance=Math.hypot(dx,dy);
+   if(distance<18)return;
+
+   // Make the gesture behave like a real physical turn:
+   // swipe tangent to the touched point's radius => clockwise/prime.
+   // This fixes the old "right swipe turns left" feeling and works
+   // consistently on U/D/L/R/F/B faces despite perspective.
+   let clockwise=true;
+   if(d.hit){
+    const center=projectToScreen(root.getWorldPosition(new THREE.Vector3()));
+    const touch=projectToScreen(d.hit);
+    const rx=touch.x-center.x;
+    const ry=-(touch.y-center.y);
+    const sx=dx;
+    const sy=-dy;
+    const cross=rx*sy-ry*sx;
+
+    if(Math.hypot(rx,ry)>12 && Math.abs(cross)>4){
+     clockwise=cross<0;
+    }else{
+     // Near the face center there is no reliable radial direction.
+     // Fall back to the intuitive screen gesture convention.
+     clockwise=(Math.abs(dx)>=Math.abs(dy)?dx>0:dy<0);
+    }
+   }
+
+   moveRef.current?.(d.face+(clockwise?'':"'"));
   };
 
   renderer.domElement.addEventListener('pointerdown',pointerDown);
