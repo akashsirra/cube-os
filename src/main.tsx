@@ -102,6 +102,39 @@ function App(){
     setHistory(h=>h.slice(0,-1));
   };
 
+  const gestureRef=React.useRef<{x:number;y:number;face:Face}|null>(null);
+  const faceFromTarget=(target:EventTarget|null):Face|null=>{
+    const el=target instanceof Element ? target.closest('.cube-face') : null;
+    if(!el)return null;
+    if(el.classList.contains('front'))return 'F';
+    if(el.classList.contains('right'))return 'R';
+    if(el.classList.contains('top'))return 'U';
+    return null;
+  };
+  const onPointerDown=(e:React.PointerEvent<HTMLDivElement>)=>{
+    const face=faceFromTarget(e.target); if(!face)return;
+    gestureRef.current={x:e.clientX,y:e.clientY,face};
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onPointerUp=(e:React.PointerEvent<HTMLDivElement>)=>{
+    const g=gestureRef.current; gestureRef.current=null;
+    if(!g)return;
+    const dx=e.clientX-g.x, dy=e.clientY-g.y;
+    if(Math.max(Math.abs(dx),Math.abs(dy))<24)return;
+    const positive=Math.abs(dx)>=Math.abs(dy)?dx>0:dy>0;
+    apply(g.face+(positive?'':"'"));
+  };
+  React.useEffect(()=>{
+    const onKey=(e:KeyboardEvent)=>{
+      if(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)return;
+      const k=e.key.toUpperCase();
+      if(FACES.includes(k as Face)) apply(e.shiftKey?k+"'":k);
+      if(e.key==='z') undo();
+    };
+    window.addEventListener('keydown',onKey);
+    return()=>window.removeEventListener('keydown',onKey);
+  });
+
   const renderFace=(face:Face)=> <div className="face-grid">{Array.from({length:9},(_,i)=><span key={i} style={{background:getColor(stickers,face,Math.floor(i/3),i%3)}} />)}</div>;
 
   return <main>
@@ -110,7 +143,7 @@ function App(){
       <div className="actions"><button onClick={doScramble}>🎲 Scramble</button><button onClick={undo} disabled={!history.length}>↩ Undo</button><button onClick={reset}>↻ Reset</button></div>
     </header>
     <section className="stage">
-      <div className="cube3d">
+      <div className="cube3d" onPointerDown={onPointerDown} onPointerUp={onPointerUp} aria-label="Interactive Rubik's Cube">
         <div className="cube-face front">{renderFace('F')}</div>
         <div className="cube-face right">{renderFace('R')}</div>
         <div className="cube-face top">{renderFace('U')}</div>
@@ -118,8 +151,8 @@ function App(){
       <div className="hud"><div><b>{history.length}</b><small>MOVES</small></div><div><b>{String(Math.floor(seconds/60)).padStart(2,'0')}:{String(seconds%60).padStart(2,'0')}</b><small>TIME</small></div></div>
     </section>
     <section className="controls">
-      <div className="movegrid">{FACES.map(f=><React.Fragment key={f}><button onClick={()=>apply(f)}>{f}</button><button onClick={()=>apply(f+"'")}>{f}'</button></React.Fragment>)}</div>
-      <div className="history">{history.length?history.join('  '):'Solved state · choose a move or scramble.'}</div>
+      <div className="gesture-hint"><span>↔</span><div><b>Swipe a face to turn it</b><small>Swipe right/down = turn · left/up = reverse</small></div></div>
+      <div className="history">{history.length?history.join('  '):'Solved state · swipe the cube to begin.'}</div>
       {scramble.length>0&&<div className="scramble">SCRAMBLE · {scramble.join(' ')}</div>}
     </section>
   </main>;
