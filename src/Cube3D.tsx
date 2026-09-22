@@ -31,6 +31,7 @@ type Props={
 
 export default function Cube3D({command,onMove,onBusyChange}:Props){
  const mount=React.useRef<HTMLDivElement>(null);
+ const engineRef=React.useRef<any>(null);
  const moveRef=React.useRef(onMove);const busyRef=React.useRef(onBusyChange);
  React.useEffect(()=>{moveRef.current=onMove},[onMove]);
  React.useEffect(()=>{busyRef.current=onBusyChange},[onBusyChange]);
@@ -218,7 +219,6 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
   };
  },[]);
 
- const engineRef=React.useRef<any>(null);
  React.useEffect(()=>{
   const e=engineRef.current;if(!e||!command)return;
   if(command.reset){e.reset();return}
