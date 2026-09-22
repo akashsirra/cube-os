@@ -145,7 +145,7 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
    if(!busy){const next=queue.shift();if(next)animateMove(next)}
   };
 
-  type GestureStart={x:number;y:number;face?:string;hit?:THREE.Vector3};
+  type GestureStart={x:number;y:number;face?:string};
   let down:GestureStart|null=null;
   const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2();
 
@@ -157,13 +157,31 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
    return raycaster.intersectObjects(cubies,false)[0];
   };
 
-  const projectToScreen=(world:THREE.Vector3)=>{
-   const r=renderer.domElement.getBoundingClientRect();
-   const p=world.clone().project(camera);
-   return {
-    x:r.left+(p.x+1)*.5*r.width,
-    y:r.top+(1-p.y)*.5*r.height
-   };
+  const projectDirection=(dir:THREE.Vector3)=>{
+   const origin=new THREE.Vector3(0,0,0);
+   const a=origin.clone().project(camera);
+   const b=dir.clone().project(camera);
+   return new THREE.Vector2(b.x-a.x,b.y-a.y).normalize();
+  };
+
+  // These are the "screen right" and "screen up" directions of each
+  // face in cube-local coordinates. We project them through the actual
+  // camera/root orientation, so a swipe follows what the user sees.
+  const FACE_BASIS:Record<string,{right:Coord;up:Coord}>={
+   F:{right:{x:1,y:0,z:0},up:{x:0,y:1,z:0}},
+   B:{right:{x:-1,y:0,z:0},up:{x:0,y:1,z:0}},
+   R:{right:{x:0,y:0,z:-1},up:{x:0,y:1,z:0}},
+   L:{right:{x:0,y:0,z:1},up:{x:0,y:1,z:0}},
+   U:{right:{x:1,y:0,z:0},up:{x:0,y:0,z:-1}},
+   D:{right:{x:1,y:0,z:0},up:{x:0,y:0,z:1}}
+  };
+
+  const screenBasis=(face:string)=>{
+   const b=FACE_BASIS[face];
+   if(!b)return null;
+   const right=projectDirection(new THREE.Vector3(b.right.x,b.right.y,b.right.z).applyQuaternion(root.quaternion));
+   const up=projectDirection(new THREE.Vector3(b.up.x,b.up.y,b.up.z).applyQuaternion(root.quaternion));
+   return {right,up};
   };
 
   const pointerDown=(e:PointerEvent)=>{
@@ -171,10 +189,12 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
    const hit=hitAt(e);
    let face:string|undefined;
    if(hit?.face){
+    // Raycaster gives the hit in world space; transform the face normal
+    // with the cubie's world matrix before deciding which layer was touched.
     const normal=hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
     face=faceFromNormal(normal);
    }
-   down={x:e.clientX,y:e.clientY,face,hit:hit?.point.clone()};
+   down={x:e.clientX,y:e.clientY,face};
    renderer.domElement.setPointerCapture(e.pointerId);
   };
 
@@ -192,31 +212,25 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
    if(!d.face)return;
 
    const dx=e.clientX-d.x,dy=e.clientY-d.y;
-   const distance=Math.hypot(dx,dy);
-   if(distance<18)return;
+   if(Math.hypot(dx,dy)<18)return;
 
-   // Make the gesture behave like a real physical turn:
-   // swipe tangent to the touched point's radius => clockwise/prime.
-   // This fixes the old "right swipe turns left" feeling and works
-   // consistently on U/D/L/R/F/B faces despite perspective.
-   let clockwise=true;
-   if(d.hit){
-    const center=projectToScreen(root.getWorldPosition(new THREE.Vector3()));
-    const touch=projectToScreen(d.hit);
-    const rx=touch.x-center.x;
-    const ry=-(touch.y-center.y);
-    const sx=dx;
-    const sy=-dy;
-    const cross=rx*sy-ry*sx;
+   const basis=screenBasis(d.face);
+   if(!basis)return;
 
-    if(Math.hypot(rx,ry)>12 && Math.abs(cross)>4){
-     clockwise=cross<0;
-    }else{
-     // Near the face center there is no reliable radial direction.
-     // Fall back to the intuitive screen gesture convention.
-     clockwise=(Math.abs(dx)>=Math.abs(dy)?dx>0:dy<0);
-    }
-   }
+   // Screen Y is positive downward, while our projected basis uses
+   // mathematical Y. Flip the gesture Y before comparing directions.
+   const swipe=new THREE.Vector2(dx,-dy).normalize();
+   const horizontal=Math.abs(swipe.dot(basis.right));
+   const vertical=Math.abs(swipe.dot(basis.up));
+
+   // IMPORTANT: the sign is intentionally tied to the visual face
+   // orientation, not to a generic clockwise test. This means:
+   // swipe right => visually clockwise face turn,
+   // swipe left  => its inverse,
+   // swipe up/down => the corresponding quarter turn.
+   const clockwise=horizontal>=vertical
+    ?swipe.dot(basis.right)>0
+    :swipe.dot(basis.up)<0;
 
    moveRef.current?.(d.face+(clockwise?'':"'"));
   };
