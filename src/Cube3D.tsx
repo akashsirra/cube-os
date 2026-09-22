@@ -32,6 +32,7 @@ type Props={
 export default function Cube3D({command,onMove,onBusyChange}:Props){
  const mount=React.useRef<HTMLDivElement>(null);
  const engineRef=React.useRef<any>(null);
+ const skipNextCommandRef.currentRef=React.useRef<Move|null>(null);
  const moveRef=React.useRef(onMove);const busyRef=React.useRef(onBusyChange);
  React.useEffect(()=>{moveRef.current=onMove},[onMove]);
  React.useEffect(()=>{busyRef.current=onBusyChange},[onBusyChange]);
@@ -152,7 +153,7 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
    startVector:THREE.Vector3;angle:number;pointerId:number;
   };
   let drag:DragState|null=null;
-  let skipNextCommand:Move|null=null;
+  let skipNextCommandRef.current:Move|null=null;
   const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2();
 
   const setPointer=(e:PointerEvent)=>{
@@ -206,7 +207,7 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
       root.attach(c);
       c.position.set(np.x,np.y,np.z);
      });
-     skipNextCommand=move;
+     skipNextCommandRef.current=move;
      moveRef.current?.(move);
     }else{
      d.selected.forEach(c=>root.attach(c));
@@ -328,10 +329,10 @@ export default function Cube3D({command,onMove,onBusyChange}:Props){
 
  React.useEffect(()=>{
   const e=engineRef.current;if(!e||!command)return;
-  if(command.reset){skipNextCommand=null;e.reset();return}
-  if(command.sequence){skipNextCommand=null;e.reset();e.enqueue(command.sequence);return}
+  if(command.reset){skipNextCommandRef.current=null;e.reset();return}
+  if(command.sequence){skipNextCommandRef.current=null;e.reset();e.enqueue(command.sequence);return}
   if(command.move){
-   if(skipNextCommand===command.move){skipNextCommand=null;return}
+   if(skipNextCommandRef.current===command.move){skipNextCommandRef.current=null;return}
    e.enqueue([command.move]);
   }
  },[command]);
